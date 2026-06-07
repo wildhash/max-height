@@ -1,0 +1,195 @@
+use chrono::{Datelike, Duration, Local, TimeZone, Timelike};
+use fs2::FileExt;
+use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::OpenOptions;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::thread;
+use std::time::Duration as StdDuration;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum EngineState {
+    Idle,
+    Staked,
+    AwaitingProof,
+    Evaluated,
+    FailLocked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SystemState {
+    user_id: String,
+    current_state: EngineState,
+    daily_stake: String,
+    stake_timestamp: Option<String>,
+    deadline_timestamp: Option<String>,
+    compressed_history_summary: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DaemonEvent<'a> {
+    event: &'a str,
+    message: &'a str,
+    state: EngineState,
+    timestamp: String,
+}
+
+fn default_state() -> SystemState {
+    SystemState {
+        user_id: "will_oak_wild".to_owned(),
+        current_state: EngineState::Idle,
+        daily_stake: String::new(),
+        stake_timestamp: None,
+        deadline_timestamp: None,
+        compressed_history_summary:
+            "User prefers high-intensity, practical feedback. No participation trophies.".to_owned(),
+    }
+}
+
+fn parse_local_timestamp(value: &str) -> Option<chrono::DateTime<Local>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|dt| dt.with_timezone(&Local))
+}
+
+fn load_state(state_path: &str) -> Result<SystemState, Box<dyn Error>> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(state_path)?;
+    file.lock_exclusive()?;
+
+    let mut raw = String::new();
+    file.read_to_string(&mut raw)?;
+
+    let state = if raw.trim().is_empty() {
+        let initial = default_state();
+        let serialized = serde_json::to_string_pretty(&initial)?;
+        file.seek(SeekFrom::Start(0))?;
+        file.set_len(0)?;
+        file.write_all(serialized.as_bytes())?;
+        file.flush()?;
+        initial
+    } else {
+        serde_json::from_str::<SystemState>(&raw)?
+    };
+
+    file.unlock()?;
+    Ok(state)
+}
+
+fn save_state(state_path: &str, state: &SystemState) -> Result<(), Box<dyn Error>> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(state_path)?;
+    file.lock_exclusive()?;
+
+    let serialized = serde_json::to_string_pretty(state)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.set_len(0)?;
+    file.write_all(serialized.as_bytes())?;
+    file.flush()?;
+
+    file.unlock()?;
+    Ok(())
+}
+
+fn post_daemon_event(
+    client: &Client,
+    webhook_url: &str,
+    event: &str,
+    message: &str,
+    state: EngineState,
+) -> Result<(), Box<dyn Error>> {
+    let payload = DaemonEvent {
+        event,
+        message,
+        state,
+        timestamp: Local::now().to_rfc3339(),
+    };
+
+    client.post(webhook_url).json(&payload).send()?.error_for_status()?;
+    Ok(())
+}
+
+fn default_evening_deadline(now: chrono::DateTime<Local>) -> Option<String> {
+    Local
+        .with_ymd_and_hms(now.year(), now.month(), now.day(), 18, 0, 0)
+        .single()
+        .map(|dt| dt.to_rfc3339())
+}
+
+fn main() {
+    let state_path = std::env::var("STATE_FILE").unwrap_or_else(|_| "./state.json".to_owned());
+    let webhook_url = std::env::var("DAEMON_WEBHOOK_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:3000/api/webhook/daemon".to_owned());
+
+    let client = Client::new();
+    let poll_interval = StdDuration::from_secs(10);
+
+    loop {
+        let now = Local::now();
+
+        let mut state = match load_state(&state_path) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("state load failed: {error}");
+                thread::sleep(poll_interval);
+                continue;
+            }
+        };
+
+        let mut events: Vec<(&str, &str)> = Vec::new();
+
+        if now.hour() == 8 && now.minute() == 0 && state.current_state == EngineState::Idle {
+            state.current_state = EngineState::Staked;
+            state.stake_timestamp = Some(now.to_rfc3339());
+            state.deadline_timestamp = default_evening_deadline(now);
+            events.push(("MORNING_CHECKIN", "08:00 check-in required. Set today stake now."));
+        }
+
+        if now.hour() == 18 && now.minute() == 0 && state.current_state == EngineState::Staked {
+            state.current_state = EngineState::AwaitingProof;
+            if state.deadline_timestamp.is_none() {
+                state.deadline_timestamp = Some((now + Duration::hours(2)).to_rfc3339());
+            }
+            events.push(("PROOF_REQUEST", "18:00 proof window open. Submit proof now."));
+        }
+
+        if state.current_state == EngineState::AwaitingProof {
+            if let Some(deadline_timestamp) = &state.deadline_timestamp {
+                if let Some(deadline) = parse_local_timestamp(deadline_timestamp) {
+                    if now > deadline {
+                        state.current_state = EngineState::FailLocked;
+                        events.push(("FAIL_LOCKED", "Deadline missed. State locked to FAIL_LOCKED."));
+                    }
+                }
+            }
+        }
+
+        if !events.is_empty() {
+            if let Err(error) = save_state(&state_path, &state) {
+                eprintln!("state save failed: {error}");
+                thread::sleep(poll_interval);
+                continue;
+            }
+
+            for (event, message) in events {
+                if let Err(error) =
+                    post_daemon_event(&client, &webhook_url, event, message, state.current_state)
+                {
+                    eprintln!("daemon webhook failed for {event}: {error}");
+                }
+            }
+        }
+
+        thread::sleep(poll_interval);
+    }
+}
