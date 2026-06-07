@@ -126,6 +126,14 @@ fn default_evening_deadline(now: chrono::DateTime<Local>) -> Option<String> {
         .map(|dt| dt.to_rfc3339())
 }
 
+fn has_today_timestamp(timestamp: &Option<String>, now: chrono::DateTime<Local>) -> bool {
+    timestamp
+        .as_deref()
+        .and_then(parse_local_timestamp)
+        .map(|dt| dt.date_naive() == now.date_naive())
+        .unwrap_or(false)
+}
+
 fn main() {
     let state_path = std::env::var("STATE_FILE").unwrap_or_else(|_| "./state.json".to_owned());
     let webhook_url = std::env::var("DAEMON_WEBHOOK_URL")
@@ -148,14 +156,17 @@ fn main() {
 
         let mut events: Vec<(&str, &str)> = Vec::new();
 
-        if now.hour() == 8 && now.minute() == 0 && state.current_state == EngineState::Idle {
+        if now.hour() >= 8
+            && state.current_state == EngineState::Idle
+            && !has_today_timestamp(&state.stake_timestamp, now)
+        {
             state.current_state = EngineState::Staked;
             state.stake_timestamp = Some(now.to_rfc3339());
             state.deadline_timestamp = default_evening_deadline(now);
             events.push(("MORNING_CHECKIN", "08:00 check-in required. Set today stake now."));
         }
 
-        if now.hour() == 18 && now.minute() == 0 && state.current_state == EngineState::Staked {
+        if now.hour() >= 18 && state.current_state == EngineState::Staked {
             state.current_state = EngineState::AwaitingProof;
             if state.deadline_timestamp.is_none() {
                 state.deadline_timestamp = Some((now + Duration::hours(2)).to_rfc3339());

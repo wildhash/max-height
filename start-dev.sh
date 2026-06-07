@@ -13,4 +13,4 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   cargo run --manifest-path "$ROOT_DIR/daemon-core/Cargo.toml"
 ) &
 
-wait
+wait -n

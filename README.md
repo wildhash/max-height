@@ -26,11 +26,11 @@ Always-on, low-latency accountability daemon built in Rust and Node.js. Uses Gem
 1. Copy `.env.example` to `.env` and set `GEMINI_API_KEY`.
 2. Install API dependencies:
    ```bash
-   cd /tmp/workspace/wildhash/max-height/api-orchestrator
+   cd api-orchestrator
    npm install
    ```
 3. Start both services:
    ```bash
-   cd /tmp/workspace/wildhash/max-height
+   cd ..
    ./start-dev.sh
    ```
