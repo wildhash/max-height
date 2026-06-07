@@ -1,0 +1,28 @@
+{
+  "name": "api-orchestrator",
+  "version": "1.0.0",
+  "description": "Node/TypeScript API and websocket orchestration for max-height",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "echo \"No tests configured\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@google/genai": "^2.8.0",
+    "express": "^5.2.1",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.2",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
