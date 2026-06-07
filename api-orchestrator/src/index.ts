@@ -187,11 +187,12 @@ app.post(
 
       let deepResult: DeepValidatorResult | null = null;
       if (typeof proofAsset === "string" && proofAsset.trim().length > 0) {
-        deepResult = await callDeepValidator(proofAsset, state.daily_stake);
+        const validatorResult = await callDeepValidator(proofAsset, state.daily_stake);
+        deepResult = validatorResult;
         await withStateLock(async () => {
           const latestState = await readStateUnlocked();
-          latestState.compressed_history_summary = deepResult.new_compressed_summary;
-          latestState.current_state = deepResult.success ? "EVALUATED" : "FAIL_LOCKED";
+          latestState.compressed_history_summary = validatorResult.new_compressed_summary;
+          latestState.current_state = validatorResult.success ? "EVALUATED" : "FAIL_LOCKED";
           await writeStateUnlocked(latestState);
         });
       }
