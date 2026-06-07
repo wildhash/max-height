@@ -11,6 +11,12 @@ export interface DeepValidatorResult {
 }
 
 let aiClient: GoogleGenAI | null = null;
+const DEEP_VALIDATOR_MAX_OUTPUT_TOKENS = 160;
+
+function compressSummary(summary: string): string {
+  const words = summary.trim().split(/\s+/).filter(Boolean);
+  return words.slice(0, 100).join(" ");
+}
 
 function getClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -37,7 +43,7 @@ export async function callFastInterceptor(
         role: "user",
         parts: [
           {
-            text: `Context summary: ${compressedHistorySummary}\n\nUser input: ${userInput}`,
+            text: `compressed_history_summary: ${compressedHistorySummary}\nuser_input: ${userInput}`,
           },
         ],
       },
@@ -77,6 +83,7 @@ export async function callDeepValidator(
     config: {
       systemInstruction: DEEP_VALIDATOR_SYSTEM_INSTRUCTION,
       responseMimeType: "application/json",
+      maxOutputTokens: DEEP_VALIDATOR_MAX_OUTPUT_TOKENS,
       temperature: 0.2,
     },
   });
@@ -98,6 +105,6 @@ export async function callDeepValidator(
   return {
     success: parsed.success,
     critique: parsed.critique,
-    new_compressed_summary: parsed.new_compressed_summary,
+    new_compressed_summary: compressSummary(parsed.new_compressed_summary),
   };
 }

@@ -3,10 +3,13 @@ use fs2::FileExt;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions, remove_file};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::thread;
 use std::time::Duration as StdDuration;
+
+const STATE_LOCK_RETRIES: usize = 40;
+const STATE_LOCK_RETRY_DELAY_MS: u64 = 25;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -36,6 +39,17 @@ struct DaemonEvent<'a> {
     timestamp: String,
 }
 
+struct StateLockGuard {
+    path: String,
+    _file: File,
+}
+
+impl Drop for StateLockGuard {
+    fn drop(&mut self) {
+        let _ = remove_file(&self.path);
+    }
+}
+
 fn default_state() -> SystemState {
     SystemState {
         user_id: "will_oak_wild".to_owned(),
@@ -52,6 +66,38 @@ fn parse_local_timestamp(value: &str) -> Option<chrono::DateTime<Local>> {
     chrono::DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|dt| dt.with_timezone(&Local))
+}
+
+fn acquire_state_lock(state_path: &str) -> Result<StateLockGuard, Box<dyn Error>> {
+    let lock_path = format!("{state_path}.lock");
+
+    for attempt in 0..STATE_LOCK_RETRIES {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(mut file) => {
+                writeln!(file, "{}", std::process::id())?;
+                file.flush()?;
+                return Ok(StateLockGuard {
+                    path: lock_path,
+                    _file: file,
+                });
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists
+                    && attempt + 1 < STATE_LOCK_RETRIES =>
+            {
+                thread::sleep(StdDuration::from_millis(STATE_LOCK_RETRY_DELAY_MS));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(format!("timed out acquiring state lock at {lock_path}").into());
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(format!("timed out acquiring state lock at {lock_path}").into())
 }
 
 fn load_state(state_path: &str) -> Result<SystemState, Box<dyn Error>> {
@@ -144,6 +190,14 @@ fn main() {
 
     loop {
         let now = Local::now();
+        let state_lock = match acquire_state_lock(&state_path) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("state lock failed: {error}");
+                thread::sleep(poll_interval);
+                continue;
+            }
+        };
 
         let mut state = match load_state(&state_path) {
             Ok(value) => value,
@@ -191,7 +245,11 @@ fn main() {
                 thread::sleep(poll_interval);
                 continue;
             }
+        }
 
+        drop(state_lock);
+
+        if !events.is_empty() {
             for (event, message) in events {
                 if let Err(error) =
                     post_daemon_event(&client, &webhook_url, event, message, state.current_state)
