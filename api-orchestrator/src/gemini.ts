@@ -11,6 +11,7 @@ export interface DeepValidatorResult {
 }
 
 let aiClient: GoogleGenAI | null = null;
+const DEEP_VALIDATOR_MAX_OUTPUT_TOKENS = 160;
 
 function compressSummary(summary: string): string {
   const words = summary.trim().split(/\s+/).filter(Boolean);
@@ -82,7 +83,7 @@ export async function callDeepValidator(
     config: {
       systemInstruction: DEEP_VALIDATOR_SYSTEM_INSTRUCTION,
       responseMimeType: "application/json",
-      maxOutputTokens: 160,
+      maxOutputTokens: DEEP_VALIDATOR_MAX_OUTPUT_TOKENS,
       temperature: 0.2,
     },
   });

@@ -100,7 +100,9 @@ async function withStateLock<T>(callback: () => Promise<T>): Promise<T> {
     }
   }
 
-  throw new Error("Timed out acquiring state lock.");
+  throw new Error(
+    `Timed out acquiring state lock at ${STATE_LOCK_FILE} after ${STATE_LOCK_RETRIES} retries with ${STATE_LOCK_RETRY_MS}ms backoff.`,
+  );
 }
 
 async function readStateUnlocked(): Promise<StateFile> {
