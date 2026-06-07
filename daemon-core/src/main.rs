@@ -97,8 +97,7 @@ fn acquire_state_lock(state_path: &str) -> Result<StateLockGuard, Box<dyn Error>
             Err(error) => return Err(error.into()),
         }
     }
-
-    Err(format!("timed out acquiring state lock at {lock_path}").into())
+    unreachable!("state lock acquisition loop should return on success or final timeout")
 }
 
 fn load_state(state_path: &str) -> Result<SystemState, Box<dyn Error>> {

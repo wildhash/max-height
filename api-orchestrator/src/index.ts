@@ -119,7 +119,7 @@ async function readState(): Promise<StateFile> {
 }
 
 async function writeStateUnlocked(state: StateFile): Promise<void> {
-  const temporaryPath = `${STATE_FILE}.${process.pid}.${Date.now()}.tmp`;
+  const temporaryPath = `${STATE_FILE}.${process.pid}.${process.hrtime.bigint()}.tmp`;
 
   try {
     await writeFile(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
@@ -130,8 +130,10 @@ async function writeStateUnlocked(state: StateFile): Promise<void> {
   }
 }
 
-async function writeState(state: StateFile): Promise<void> {
+async function updateState(mutator: (state: StateFile) => void | Promise<void>): Promise<void> {
   await withStateLock(async () => {
+    const state = await readStateUnlocked();
+    await mutator(state);
     await writeStateUnlocked(state);
   });
 }
@@ -189,11 +191,9 @@ app.post(
       if (typeof proofAsset === "string" && proofAsset.trim().length > 0) {
         const validatorResult = await callDeepValidator(proofAsset, state.daily_stake);
         deepResult = validatorResult;
-        await withStateLock(async () => {
-          const latestState = await readStateUnlocked();
+        await updateState((latestState) => {
           latestState.compressed_history_summary = validatorResult.new_compressed_summary;
           latestState.current_state = validatorResult.success ? "EVALUATED" : "FAIL_LOCKED";
-          await writeStateUnlocked(latestState);
         });
       }
 
