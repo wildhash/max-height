@@ -49,7 +49,12 @@ export async function callFastInterceptor(
     },
   });
 
-  return response.text?.trim() || "No response from fast interceptor.";
+  const text = response.text?.trim();
+  if (!text) {
+    throw new Error("Fast interceptor returned empty response.");
+  }
+
+  return text;
 }
 
 export async function callDeepValidator(
