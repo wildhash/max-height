@@ -3,7 +3,13 @@ import { createServer } from "node:http";
 import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { WebSocketServer } from "ws";
-import { callDeepValidator, callFastInterceptor, type DeepValidatorResult } from "./gemini";
+import { buildDailyBriefingPayload, type DailyBriefingData } from "./briefing";
+import {
+  callDeepValidator,
+  callFastInterceptor,
+  callMorningBriefingInterceptor,
+  type DeepValidatorResult,
+} from "./gemini";
 
 type EngineState = "IDLE" | "STAKED" | "AWAITING_PROOF" | "EVALUATED" | "FAIL_LOCKED";
 
@@ -14,6 +20,8 @@ interface StateFile {
   stake_timestamp: string | null;
   deadline_timestamp: string | null;
   compressed_history_summary: string;
+  morning_interrupt_hour_local: number;
+  daily_briefing_data: DailyBriefingData;
 }
 
 interface DaemonWebhookRequest {
@@ -26,6 +34,13 @@ interface DaemonWebhookRequest {
 interface UserRespondRequest {
   userInput: string;
   proofAsset?: string;
+}
+
+interface FetchBriefingResponse {
+  fetchedAt: string;
+  agendaSummary: string;
+  breakingNewsHeadlines: string[];
+  briefingText: string;
 }
 
 const app = express();
@@ -62,8 +77,69 @@ function isStateFile(value: unknown): value is StateFile {
     typeof typed.daily_stake === "string" &&
     (typed.stake_timestamp === null || typeof typed.stake_timestamp === "string") &&
     (typed.deadline_timestamp === null || typeof typed.deadline_timestamp === "string") &&
-    typeof typed.compressed_history_summary === "string"
+    typeof typed.compressed_history_summary === "string" &&
+    typeof typed.morning_interrupt_hour_local === "number" &&
+    isDailyBriefingData(typed.daily_briefing_data)
   );
+}
+
+function isDailyBriefingData(value: unknown): value is DailyBriefingData {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const typed = value as Partial<DailyBriefingData>;
+  return (
+    (typed.fetched_at === null || typeof typed.fetched_at === "string") &&
+    typeof typed.raw_agenda_summary === "string" &&
+    Array.isArray(typed.breaking_news_headlines) &&
+    typed.breaking_news_headlines.every((headline) => typeof headline === "string")
+  );
+}
+
+function normalizeStateFile(value: unknown): StateFile {
+  if (!value || typeof value !== "object") {
+    throw new Error("state.json has invalid schema");
+  }
+
+  const typed = value as Partial<StateFile>;
+  if (
+    typeof typed.user_id !== "string" ||
+    !isEngineState(typed.current_state) ||
+    typeof typed.daily_stake !== "string" ||
+    (typed.stake_timestamp !== null && typeof typed.stake_timestamp !== "string") ||
+    (typed.deadline_timestamp !== null && typeof typed.deadline_timestamp !== "string") ||
+    typeof typed.compressed_history_summary !== "string"
+  ) {
+    throw new Error("state.json has invalid schema");
+  }
+
+  const morningInterruptHour =
+    typeof typed.morning_interrupt_hour_local === "number" &&
+    Number.isInteger(typed.morning_interrupt_hour_local) &&
+    typed.morning_interrupt_hour_local >= 0 &&
+    typed.morning_interrupt_hour_local <= 23
+      ? typed.morning_interrupt_hour_local
+      : 8;
+
+  const dailyBriefingData = isDailyBriefingData(typed.daily_briefing_data)
+    ? typed.daily_briefing_data
+    : {
+        fetched_at: null,
+        raw_agenda_summary: "",
+        breaking_news_headlines: [],
+      };
+
+  return {
+    user_id: typed.user_id,
+    current_state: typed.current_state,
+    daily_stake: typed.daily_stake,
+    stake_timestamp: typed.stake_timestamp ?? null,
+    deadline_timestamp: typed.deadline_timestamp ?? null,
+    compressed_history_summary: typed.compressed_history_summary,
+    morning_interrupt_hour_local: morningInterruptHour,
+    daily_briefing_data: dailyBriefingData,
+  };
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -108,12 +184,7 @@ async function withStateLock<T>(callback: () => Promise<T>): Promise<T> {
 async function readStateUnlocked(): Promise<StateFile> {
   const raw = await readFile(STATE_FILE, "utf8");
   const parsed = JSON.parse(raw) as unknown;
-
-  if (!isStateFile(parsed)) {
-    throw new Error("state.json has invalid schema");
-  }
-
-  return parsed;
+  return normalizeStateFile(parsed);
 }
 
 async function readState(): Promise<StateFile> {
@@ -150,6 +221,47 @@ function broadcast(eventName: string, payload: unknown): void {
   }
 }
 
+function hasBriefingForToday(fetchedAt: string | null): boolean {
+  if (!fetchedAt) {
+    return false;
+  }
+
+  const fetchedDate = new Date(fetchedAt);
+  if (Number.isNaN(fetchedDate.getTime())) {
+    return false;
+  }
+
+  const now = new Date();
+  return (
+    fetchedDate.getFullYear() === now.getFullYear() &&
+    fetchedDate.getMonth() === now.getMonth() &&
+    fetchedDate.getDate() === now.getDate()
+  );
+}
+
+async function fetchAndPersistBriefing(): Promise<FetchBriefingResponse> {
+  const briefing = await buildDailyBriefingPayload();
+  await updateState((state) => {
+    state.daily_briefing_data = {
+      fetched_at: briefing.fetchedAt,
+      raw_agenda_summary: briefing.agendaSummary,
+      breaking_news_headlines: briefing.breakingNewsHeadlines,
+    };
+  });
+
+  return briefing;
+}
+
+app.post("/api/engine/fetch-briefing", async (_req: Request, res: Response) => {
+  try {
+    const briefing = await fetchAndPersistBriefing();
+    res.status(200).json(briefing);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown server error";
+    res.status(500).json({ error: message });
+  }
+    });
+
 app.post(
   "/api/webhook/daemon",
   async (
@@ -168,8 +280,37 @@ app.post(
       return;
     }
 
-    broadcast("daemon.trigger", body);
-    res.status(202).json({ accepted: true });
+    try {
+      let morningBriefingMessage: string | null = null;
+      if (body.event === "MORNING_CHECKIN") {
+        const state = await readState();
+        const briefingData = hasBriefingForToday(state.daily_briefing_data.fetched_at)
+          ? state.daily_briefing_data
+          : (() => {
+              throw new Error("Daily briefing missing for current date. Call /api/engine/fetch-briefing first.");
+            })();
+
+        morningBriefingMessage = await callMorningBriefingInterceptor(
+          [
+            `Agenda: ${briefingData.raw_agenda_summary}`,
+            `Breaking news: ${briefingData.breaking_news_headlines.join(" || ") || "No headlines available."}`,
+          ].join("\n"),
+          state.compressed_history_summary,
+          state.daily_stake,
+        );
+      }
+
+      const payload = {
+        ...body,
+        morningBriefingMessage,
+      };
+
+      broadcast("daemon.trigger", payload);
+      res.status(202).json({ accepted: true, morningBriefingMessage });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown server error";
+      res.status(500).json({ error: message });
+    }
   },
 );
 

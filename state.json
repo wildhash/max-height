@@ -4,5 +4,11 @@
   "daily_stake": "",
   "stake_timestamp": null,
   "deadline_timestamp": null,
-  "compressed_history_summary": "User prefers high-intensity, practical feedback. No participation trophies."
+  "compressed_history_summary": "User prefers high-intensity, practical feedback. No participation trophies.",
+  "morning_interrupt_hour_local": 8,
+  "daily_briefing_data": {
+    "fetched_at": null,
+    "raw_agenda_summary": "",
+    "breaking_news_headlines": []
+  }
 }

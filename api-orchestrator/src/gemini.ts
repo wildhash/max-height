@@ -63,6 +63,44 @@ export async function callFastInterceptor(
   return text;
 }
 
+export async function callMorningBriefingInterceptor(
+  briefingText: string,
+  compressedHistorySummary: string,
+  dailyStake: string,
+): Promise<string> {
+  const ai = getClient();
+  const response = await ai.models.generateContent({
+    model: "gemini-1.5-flash",
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: [
+              "MORNING_BRIEFING",
+              `compressed_history_summary: ${compressedHistorySummary}`,
+              `daily_stake: ${dailyStake || "(unset)"}`,
+              briefingText,
+            ].join("\n"),
+          },
+        ],
+      },
+    ],
+    config: {
+      systemInstruction: FAST_INTERCEPTOR_SYSTEM_INSTRUCTION,
+      maxOutputTokens: 160,
+      temperature: 0.6,
+    },
+  });
+
+  const text = response.text?.trim();
+  if (!text) {
+    throw new Error("Morning briefing interceptor returned empty response.");
+  }
+
+  return text;
+}
+
 export async function callDeepValidator(
   proofAsset: string,
   dailyStake: string,
