@@ -29,6 +29,21 @@ struct SystemState {
     stake_timestamp: Option<String>,
     deadline_timestamp: Option<String>,
     compressed_history_summary: String,
+    #[serde(default = "default_morning_interrupt_hour")]
+    morning_interrupt_hour_local: u8,
+    #[serde(default)]
+    daily_briefing_data: DailyBriefingData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct DailyBriefingData {
+    fetched_at: Option<String>,
+    raw_agenda_summary: String,
+    breaking_news_headlines: Vec<String>,
+}
+
+fn default_morning_interrupt_hour() -> u8 {
+    8
 }
 
 #[derive(Debug, Serialize)]
@@ -59,6 +74,12 @@ fn default_state() -> SystemState {
         deadline_timestamp: None,
         compressed_history_summary:
             "User prefers high-intensity, practical feedback. No participation trophies.".to_owned(),
+        morning_interrupt_hour_local: 8,
+        daily_briefing_data: DailyBriefingData {
+            fetched_at: None,
+            raw_agenda_summary: String::new(),
+            breaking_news_headlines: Vec::new(),
+        },
     }
 }
 
@@ -165,6 +186,11 @@ fn post_daemon_event(
     Ok(())
 }
 
+fn fetch_daily_briefing(client: &Client, briefing_url: &str) -> Result<(), Box<dyn Error>> {
+    client.post(briefing_url).send()?.error_for_status()?;
+    Ok(())
+}
+
 fn default_evening_deadline(now: chrono::DateTime<Local>) -> Option<String> {
     Local
         .with_ymd_and_hms(now.year(), now.month(), now.day(), 18, 0, 0)
@@ -184,6 +210,8 @@ fn main() {
     let state_path = std::env::var("STATE_FILE").unwrap_or_else(|_| "./state.json".to_owned());
     let webhook_url = std::env::var("DAEMON_WEBHOOK_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:3000/api/webhook/daemon".to_owned());
+    let briefing_url = std::env::var("BRIEFING_FETCH_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:3000/api/engine/fetch-briefing".to_owned());
 
     let client = Client::new();
     let poll_interval = StdDuration::from_secs(10);
@@ -208,16 +236,20 @@ fn main() {
             }
         };
 
-        let mut events: Vec<(&str, &str)> = Vec::new();
+        let mut events: Vec<(String, String)> = Vec::new();
+        let mut should_fetch_morning_briefing = false;
 
-        if now.hour() >= 8
+        let morning_hour = u32::from(state.morning_interrupt_hour_local);
+        if now.hour() >= morning_hour
             && state.current_state == EngineState::Idle
             && !has_today_timestamp(&state.stake_timestamp, now)
         {
             state.current_state = EngineState::Staked;
             state.stake_timestamp = Some(now.to_rfc3339());
             state.deadline_timestamp = default_evening_deadline(now);
-            events.push(("MORNING_CHECKIN", "08:00 check-in required. Set today stake now."));
+            should_fetch_morning_briefing = true;
+            let morning_message = format!("{morning_hour:02}:00 check-in required. Set today stake now.");
+            events.push(("MORNING_CHECKIN".to_owned(), morning_message));
         }
 
         if now.hour() >= 18 && state.current_state == EngineState::Staked {
@@ -225,7 +257,10 @@ fn main() {
             if state.deadline_timestamp.is_none() {
                 state.deadline_timestamp = Some((now + Duration::hours(2)).to_rfc3339());
             }
-            events.push(("PROOF_REQUEST", "18:00 proof window open. Submit proof now."));
+            events.push((
+                "PROOF_REQUEST".to_owned(),
+                "18:00 proof window open. Submit proof now.".to_owned(),
+            ));
         }
 
         if state.current_state == EngineState::AwaitingProof {
@@ -233,7 +268,10 @@ fn main() {
                 if let Some(deadline) = parse_local_timestamp(deadline_timestamp) {
                     if now > deadline {
                         state.current_state = EngineState::FailLocked;
-                        events.push(("FAIL_LOCKED", "Deadline missed. State locked to FAIL_LOCKED."));
+                        events.push((
+                            "FAIL_LOCKED".to_owned(),
+                            "Deadline missed. State locked to FAIL_LOCKED.".to_owned(),
+                        ));
                     }
                 }
             }
@@ -250,10 +288,20 @@ fn main() {
         drop(state_lock);
 
         if !events.is_empty() {
+            if should_fetch_morning_briefing {
+                if let Err(error) = fetch_daily_briefing(&client, &briefing_url) {
+                    eprintln!("briefing fetch failed: {error}");
+                }
+            }
+
             for (event, message) in events {
-                if let Err(error) =
-                    post_daemon_event(&client, &webhook_url, event, message, state.current_state)
-                {
+                if let Err(error) = post_daemon_event(
+                    &client,
+                    &webhook_url,
+                    event.as_str(),
+                    message.as_str(),
+                    state.current_state,
+                ) {
                     eprintln!("daemon webhook failed for {event}: {error}");
                 }
             }
