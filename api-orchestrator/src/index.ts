@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { WebSocketServer } from "ws";
-import { buildDailyBriefingPayload } from "./briefing";
+import { buildDailyBriefingPayload, type DailyBriefingData } from "./briefing";
 import {
   callDeepValidator,
   callFastInterceptor,
@@ -22,12 +22,6 @@ interface StateFile {
   compressed_history_summary: string;
   morning_interrupt_hour_local: number;
   daily_briefing_data: DailyBriefingData;
-}
-
-interface DailyBriefingData {
-  fetched_at: string | null;
-  raw_agenda_summary: string;
-  breaking_news_headlines: string[];
 }
 
 interface DaemonWebhookRequest {
