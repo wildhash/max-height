@@ -248,7 +248,13 @@ fn main() {
             state.stake_timestamp = Some(now.to_rfc3339());
             state.deadline_timestamp = default_evening_deadline(now);
             should_fetch_morning_briefing = true;
-            let morning_message = format!("{morning_hour:02}:00 check-in required. Set today stake now.");
+            let meridiem = if morning_hour >= 12 { "PM" } else { "AM" };
+            let display_hour = match morning_hour % 12 {
+                0 => 12,
+                hour => hour,
+            };
+            let morning_message =
+                format!("{display_hour}:00 {meridiem} check-in required. Set today stake now.");
             events.push(("MORNING_CHECKIN".to_owned(), morning_message));
         }
 

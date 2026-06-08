@@ -16,6 +16,7 @@ Always-on, low-latency accountability daemon built in Rust and Node.js. Uses Gem
     ├── package.json
     ├── tsconfig.json
     └── src/
+        ├── briefing.ts
         ├── index.ts
         ├── gemini.ts
         └── prompts.ts
@@ -34,3 +35,9 @@ Always-on, low-latency accountability daemon built in Rust and Node.js. Uses Gem
    cd ..
    ./start-dev.sh
    ```
+
+## Morning briefing flow
+
+- The daemon now uses `state.json.morning_interrupt_hour_local` (default `8`) to trigger the morning interrupt.
+- Before posting `MORNING_CHECKIN`, the daemon calls `POST /api/engine/fetch-briefing` (`BRIEFING_FETCH_URL`) so `state.json.daily_briefing_data` is populated.
+- The API injects the cached agenda/news briefing into Gemini Flash and broadcasts the generated commitment-lock morning message with the daemon trigger payload.

@@ -31,7 +31,7 @@ function stripTags(value: string): string {
 }
 
 function normalizeHeadline(value: string): string {
-  return stripTags(value).replace(/&amp;/g, "&").replace(/&#39;/g, "'").trim();
+  return stripTags(value).trim();
 }
 
 function parseRssTitles(xml: string): string[] {
@@ -110,7 +110,7 @@ export async function buildDailyBriefingPayload(): Promise<BriefingPayload> {
 
   const briefingText = [
     `Agenda: ${agendaSummary}`,
-    `Breaking news: ${headlines.join(" || ") || "No headline data available."}`,
+    `Breaking news: ${headlines.length > 0 ? headlines.join(" || ") : "No headline data available."}`,
   ].join("\n");
 
   return {

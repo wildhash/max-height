@@ -224,49 +224,49 @@ function broadcast(eventName: string, payload: unknown): void {
     if (client.readyState === 1) {
       client.send(message);
     }
-
-    function hasBriefingForToday(fetchedAt: string | null): boolean {
-      if (!fetchedAt) {
-        return false;
-      }
-
-      const fetchedDate = new Date(fetchedAt);
-      if (Number.isNaN(fetchedDate.getTime())) {
-        return false;
-      }
-
-      const now = new Date();
-      return (
-        fetchedDate.getFullYear() === now.getFullYear() &&
-        fetchedDate.getMonth() === now.getMonth() &&
-        fetchedDate.getDate() === now.getDate()
-      );
-    }
-
-    async function fetchAndPersistBriefing(): Promise<FetchBriefingResponse> {
-      const briefing = await buildDailyBriefingPayload();
-      await updateState((state) => {
-        state.daily_briefing_data = {
-          fetched_at: briefing.fetchedAt,
-          raw_agenda_summary: briefing.agendaSummary,
-          breaking_news_headlines: briefing.breakingNewsHeadlines,
-        };
-      });
-
-      return briefing;
-    }
-
-    app.post("/api/engine/fetch-briefing", async (_req: Request, res: Response) => {
-      try {
-        const briefing = await fetchAndPersistBriefing();
-        res.status(200).json(briefing);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown server error";
-        res.status(500).json({ error: message });
-      }
-    });
   }
 }
+
+function hasBriefingForToday(fetchedAt: string | null): boolean {
+  if (!fetchedAt) {
+    return false;
+  }
+
+  const fetchedDate = new Date(fetchedAt);
+  if (Number.isNaN(fetchedDate.getTime())) {
+    return false;
+  }
+
+  const now = new Date();
+  return (
+    fetchedDate.getFullYear() === now.getFullYear() &&
+    fetchedDate.getMonth() === now.getMonth() &&
+    fetchedDate.getDate() === now.getDate()
+  );
+}
+
+async function fetchAndPersistBriefing(): Promise<FetchBriefingResponse> {
+  const briefing = await buildDailyBriefingPayload();
+  await updateState((state) => {
+    state.daily_briefing_data = {
+      fetched_at: briefing.fetchedAt,
+      raw_agenda_summary: briefing.agendaSummary,
+      breaking_news_headlines: briefing.breakingNewsHeadlines,
+    };
+  });
+
+  return briefing;
+}
+
+app.post("/api/engine/fetch-briefing", async (_req: Request, res: Response) => {
+  try {
+    const briefing = await fetchAndPersistBriefing();
+    res.status(200).json(briefing);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown server error";
+    res.status(500).json({ error: message });
+  }
+    });
 
 app.post(
   "/api/webhook/daemon",
