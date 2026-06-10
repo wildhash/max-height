@@ -36,8 +36,8 @@ function stripTags(value: string): string {
 function cleanText(value: string, maxLength = MAX_TEXT_FIELD_LENGTH): string {
   const withoutTags = stripTags(value);
   const withoutControls = withoutTags.replace(/[\u0000-\u001f\u007f]/g, " ");
-  const withoutJsonShims = withoutControls.replace(/[{}[\]]/g, " ");
-  const singleLine = withoutJsonShims.replace(/\s+/g, " ").trim();
+  const withoutJsonChars = withoutControls.replace(/[{}[\]]/g, " ");
+  const singleLine = withoutJsonChars.replace(/\s+/g, " ").trim();
   return singleLine.slice(0, maxLength);
 }
 
@@ -124,6 +124,9 @@ export async function buildDailyBriefingPayload(): Promise<BriefingPayload> {
   const cleanHeadlines = headlines
     .map((headline) => normalizeHeadline(headline))
     .filter((headline) => headline.length > 0);
+  if (cleanHeadlines.length < headlines.length) {
+    console.warn("Dropped empty or malformed headlines after normalization.");
+  }
 
   const briefingText = [
     `Agenda: ${agendaSummary}`,

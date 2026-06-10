@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs::{File, OpenOptions, remove_file};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::thread;
 use std::time::Duration as StdDuration;
 
@@ -197,7 +196,7 @@ fn apply_offline_briefing_fallback(state_path: &str) -> Result<(), Box<dyn Error
 
     if state.daily_briefing_data.raw_agenda_summary.trim().is_empty() {
         state.daily_briefing_data.raw_agenda_summary =
-            "Offline fallback: reuse stale agenda context and proceed with stake execution."
+            "Offline fallback: reuse stale agenda context and proceed with state execution."
                 .to_owned();
     }
 
@@ -217,14 +216,17 @@ fn fetch_daily_briefing(
     briefing_url: &str,
     state_path: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let request_attempt = catch_unwind(AssertUnwindSafe(|| -> Result<(), reqwest::Error> {
-        client
-            .post(briefing_url)
+    let request_client = client.clone();
+    let request_url = briefing_url.to_owned();
+    let request_attempt = thread::spawn(move || -> Result<(), reqwest::Error> {
+        request_client
+            .post(&request_url)
             .timeout(StdDuration::from_secs(5))
             .send()?
             .error_for_status()?;
         Ok(())
-    }));
+    })
+    .join();
 
     match request_attempt {
         Ok(Ok(())) => Ok(()),
