@@ -216,26 +216,20 @@ fn fetch_daily_briefing(
     briefing_url: &str,
     state_path: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let request_client = client.clone();
-    let request_url = briefing_url.to_owned();
-    let request_attempt = thread::spawn(move || -> Result<(), reqwest::Error> {
-        request_client
-            .post(&request_url)
-            .timeout(StdDuration::from_secs(5))
-            .send()?
-            .error_for_status()?;
-        Ok(())
-    })
-    .join();
-
-    match request_attempt {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) => {
+    match client
+        .post(briefing_url)
+        .timeout(StdDuration::from_secs(5))
+        .send()
+    {
+        Ok(response) => match response.error_for_status() {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                eprintln!("briefing network call failed; using stale fallback: {error}");
+                apply_offline_briefing_fallback(state_path)
+            }
+        },
+        Err(error) => {
             eprintln!("briefing network call failed; using stale fallback: {error}");
-            apply_offline_briefing_fallback(state_path)
-        }
-        Err(_) => {
-            eprintln!("briefing fetch panicked; using stale fallback schema");
             apply_offline_briefing_fallback(state_path)
         }
     }
