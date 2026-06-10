@@ -22,6 +22,9 @@ const NEWS_RSS_FEEDS = [
   "https://www.reutersagency.com/feed/?best-sectors=technology",
 ];
 
+const MAX_TEXT_FIELD_LENGTH = 320;
+const MAX_HEADLINE_LENGTH = 180;
+
 function stripTags(value: string): string {
   return value
     .replace(/<!\[CDATA\[(.*?)\]\]>/g, "$1")
@@ -30,8 +33,16 @@ function stripTags(value: string): string {
     .trim();
 }
 
+function cleanText(value: string, maxLength = MAX_TEXT_FIELD_LENGTH): string {
+  const withoutTags = stripTags(value);
+  const withoutControls = withoutTags.replace(/[\u0000-\u001f\u007f]/g, " ");
+  const withoutJsonChars = withoutControls.replace(/[{}[\]]/g, " ");
+  const singleLine = withoutJsonChars.replace(/\s+/g, " ").trim();
+  return singleLine.slice(0, maxLength);
+}
+
 function normalizeHeadline(value: string): string {
-  return stripTags(value).trim();
+  return cleanText(value, MAX_HEADLINE_LENGTH);
 }
 
 function parseRssTitles(xml: string): string[] {
@@ -47,9 +58,12 @@ function summarizeAgenda(signals: AgendaSignal[]): string {
   }
 
   const summary = signals
-    .map((signal) => `${signal.source.toUpperCase()}: ${signal.title} [${signal.urgency}]`)
+    .map(
+      (signal) =>
+        `${signal.source.toUpperCase()}: ${cleanText(signal.title)} [${signal.urgency}]`,
+    )
     .join(" | ");
-  return `Priority agenda pressure: ${summary}`;
+  return cleanText(`Priority agenda pressure: ${summary}`);
 }
 
 function createMockAgendaSignals(): AgendaSignal[] {
@@ -101,22 +115,28 @@ async function fetchBreakingNewsHeadlines(maxCount = 6): Promise<string[]> {
 
 export async function buildDailyBriefingPayload(): Promise<BriefingPayload> {
   const fetchedAt = new Date().toISOString();
-  const agendaSummary = summarizeAgenda(createMockAgendaSignals());
+  const agendaSummary = cleanText(summarizeAgenda(createMockAgendaSignals()));
   const headlines = await fetchBreakingNewsHeadlines().catch(() => [
     "Markets volatile as AI infrastructure spending accelerates across major cloud firms.",
     "Central banks hold rates steady while macro uncertainty keeps growth forecasts tight.",
     "Frontier model competition intensifies with new enterprise deployment race.",
   ]);
+  const cleanHeadlines = headlines
+    .map((headline) => normalizeHeadline(headline))
+    .filter((headline) => headline.length > 0);
+  if (cleanHeadlines.length < headlines.length) {
+    console.warn("Dropped empty or malformed headlines after normalization.");
+  }
 
   const briefingText = [
     `Agenda: ${agendaSummary}`,
-    `Breaking news: ${headlines.length > 0 ? headlines.join(" || ") : "No headline data available."}`,
+    `Breaking news: ${cleanHeadlines.length > 0 ? cleanHeadlines.join(" || ") : "No headline data available."}`,
   ].join("\n");
 
   return {
     fetchedAt,
     agendaSummary,
-    breakingNewsHeadlines: headlines,
-    briefingText,
+    breakingNewsHeadlines: cleanHeadlines,
+    briefingText: cleanText(briefingText, 1000),
   };
 }
