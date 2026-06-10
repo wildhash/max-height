@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs::{File, OpenOptions, remove_file};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::thread;
 use std::time::Duration as StdDuration;
 
@@ -186,9 +187,56 @@ fn post_daemon_event(
     Ok(())
 }
 
-fn fetch_daily_briefing(client: &Client, briefing_url: &str) -> Result<(), Box<dyn Error>> {
-    client.post(briefing_url).send()?.error_for_status()?;
+fn apply_offline_briefing_fallback(state_path: &str) -> Result<(), Box<dyn Error>> {
+    let state_lock = acquire_state_lock(state_path)?;
+    let mut state = load_state(state_path)?;
+
+    if state.daily_briefing_data.fetched_at.is_none() {
+        state.daily_briefing_data.fetched_at = Some(Local::now().to_rfc3339());
+    }
+
+    if state.daily_briefing_data.raw_agenda_summary.trim().is_empty() {
+        state.daily_briefing_data.raw_agenda_summary =
+            "Offline fallback: reuse stale agenda context and proceed with stake execution."
+                .to_owned();
+    }
+
+    if state.daily_briefing_data.breaking_news_headlines.is_empty() {
+        state.daily_briefing_data.breaking_news_headlines = vec![
+            "Offline fallback: stale briefing mode enabled while network recovers.".to_owned(),
+        ];
+    }
+
+    save_state(state_path, &state)?;
+    drop(state_lock);
     Ok(())
+}
+
+fn fetch_daily_briefing(
+    client: &Client,
+    briefing_url: &str,
+    state_path: &str,
+) -> Result<(), Box<dyn Error>> {
+    let request_attempt = catch_unwind(AssertUnwindSafe(|| -> Result<(), reqwest::Error> {
+        client
+            .post(briefing_url)
+            .timeout(StdDuration::from_secs(5))
+            .send()?
+            .error_for_status()?;
+        Ok(())
+    }));
+
+    match request_attempt {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => {
+            eprintln!("briefing network call failed; using stale fallback: {error}");
+            apply_offline_briefing_fallback(state_path)
+        }
+        Err(_) => {
+            eprintln!("briefing fetch panicked; using stale fallback schema");
+            apply_offline_briefing_fallback(state_path)
+        }
+    }
 }
 
 fn default_evening_deadline(now: chrono::DateTime<Local>) -> Option<String> {
@@ -295,7 +343,7 @@ fn main() {
 
         if !events.is_empty() {
             if should_fetch_morning_briefing {
-                if let Err(error) = fetch_daily_briefing(&client, &briefing_url) {
+                if let Err(error) = fetch_daily_briefing(&client, &briefing_url, &state_path) {
                     eprintln!("briefing fetch failed: {error}");
                 }
             }
